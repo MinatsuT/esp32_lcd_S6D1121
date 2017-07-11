@@ -16,7 +16,7 @@ ESP32   LCD
 GND  -- GND and LED
 IO23 -- RS
 IO22 -- WR
-IO21 -- RD (Optional: If connect them, you can read ID of the LCD controller which is always '1121'.)
+IO21 -- RD (Optional: If these pins are connected, you can read ID of the LCD controller which is always '1121'.)
 IO19 -- RST
 
 IO18 -- D0
