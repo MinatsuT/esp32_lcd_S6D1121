@@ -36,6 +36,12 @@ void app_main(void)
     ESP_ERROR_CHECK( esp_wifi_start() );
     ESP_ERROR_CHECK( esp_wifi_connect() );
 
-    lcd_test();
+    while(1) {
+	// GPIO test
+	lcd_test();
+
+	// I2S test
+	i2s_lcd_test();
+    }
 }
 
