@@ -10,17 +10,20 @@
 #include "soc/cpu.h"
 #include "esp32_S6D1121.h"
 
+/* i2s_lcd.c */
+void i2s_lcd_test(void);
+
 #define CMD 0
 #define DATA 1
 
 #define RGB(r,g,b) ( (((r>>3)&0b11111)<<11) |  (((g>>2)&0b111111)<<5) |  (((b>>3)&0b11111)<<0) )
 
 static void strobe(gpio_num_t GPIO_NUM, uint32_t s_trig, uint32_t s_normal);
-static void initControlPins(void);
+static void initGPIO(void);
 static void setWriteDir(void);
 static void setReadDir(void);
-static void write(uint8_t VL, uint8_t isData);
-static uint16_t read(uint8_t reg);
+static void writeLCD(uint8_t VL, uint8_t isData);
+static uint16_t LCD_Read_DATA(uint8_t reg);
 static void LCD_Write_COM(uint8_t reg);
 static void LCD_Write_DATA(uint16_t dat);
 static void LCD_Write_COM_DATA(uint8_t reg, uint16_t dat);
@@ -28,12 +31,10 @@ static void initLCD(void);
 static void setWindow(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2);
 static void setXY(uint8_t x1, uint8_t y1);
 
-static void strobe(gpio_num_t GPIO_NUM, uint32_t s_trig, uint32_t s_normal) {
-    gpio_set_level(GPIO_NUM, s_trig);
-    gpio_set_level(GPIO_NUM, s_normal);
-}
-
-static void initControlPins() {
+/*****************************************************
+ * GPIO functions
+ ****************************************************/
+static void initGPIO() {
     gpio_pad_select_gpio(D0);
     gpio_pad_select_gpio(D1);
     gpio_pad_select_gpio(D2);
@@ -57,6 +58,13 @@ static void initControlPins() {
     gpio_set_level(RST, 1);
     gpio_set_level(WR, 1);
     gpio_set_level(RS, 1);
+
+    setWriteDir();
+}
+
+static void strobe(gpio_num_t GPIO_NUM, uint32_t s_trig, uint32_t s_normal) {
+    gpio_set_level(GPIO_NUM, s_trig);
+    gpio_set_level(GPIO_NUM, s_normal);
 }
 
 static void setWriteDir() {
@@ -99,7 +107,11 @@ static void setReadDir() {
     gpio_pulldown_dis(D7);
 }
 
-static void write(uint8_t VL, uint8_t isData) {
+
+/*****************************************************
+ * Primitive read/write functions
+ ****************************************************/
+static void writeByte(uint8_t VL, uint8_t isData) {
     gpio_set_level(RS, isData);
 
     gpio_set_level(D0, (VL>>0) & 1);
@@ -114,7 +126,7 @@ static void write(uint8_t VL, uint8_t isData) {
     strobe(WR,0,1);
 }
 
-uint8_t readDat() {
+static uint8_t readByte() {
     gpio_set_level(RS, 1); // set RS to Data
 
     gpio_set_level(RD, 0);
@@ -132,25 +144,28 @@ uint8_t readDat() {
     return dat;
 }
 
-static uint16_t read(uint8_t reg) {
+/*****************************************************
+ * LCD Read/Write functions
+ ****************************************************/
+static uint16_t LCD_Read_DATA(uint8_t reg) {
     LCD_Write_COM(reg);
 
     setReadDir();
-    uint16_t VH=readDat();
-    uint16_t VL=readDat();
+    uint16_t VH=readByte();
+    uint16_t VL=readByte();
     setWriteDir();
 
     return VH<<8 | VL;
 }
 
 static void LCD_Write_COM(uint8_t reg) {
-    write(0x00,CMD);
-    write(reg,CMD);
+    writeByte(0x00,CMD);
+    writeByte(reg,CMD);
 }
 
 static void LCD_Write_DATA(uint16_t dat) {
-    write(dat >> 8, DATA);
-    write(dat & 0xff ,DATA);
+    writeByte(dat >> 8, DATA);
+    writeByte(dat & 0xff ,DATA);
 }
 
 static void LCD_Write_COM_DATA(uint8_t reg, uint16_t dat) {
@@ -158,6 +173,9 @@ static void LCD_Write_COM_DATA(uint8_t reg, uint16_t dat) {
     LCD_Write_DATA(dat);
 }
 
+/*****************************************************
+ * LCD commands
+ ****************************************************/
 static void initLCD() {
     LCD_Write_COM_DATA(0x11,0x2004);		
     LCD_Write_COM_DATA(0x13,0xCC00);		
@@ -218,35 +236,47 @@ static void setXY(uint8_t x1, uint8_t y1) {
     LCD_Write_COM(0x22);
 }
 
+/*****************************************************
+ * Test codes
+ ****************************************************/
 void lcd_test() {
-    initControlPins();
-    setWriteDir();
+    // Init GPIO
+    initGPIO();
 
+    // Reset LCD
     gpio_set_level(RST, 0);
+    vTaskDelay(1/portTICK_PERIOD_MS);
     gpio_set_level(RST, 1);
-
-    printf("Reading ID...\n");
-    uint16_t V = read(0);
-    printf("ID=%04x\n",V);
+    vTaskDelay(1/portTICK_PERIOD_MS);
 
     initLCD();
 
-    setWindow(0,0,0xEF,0x13F);
+    printf("Reading ID...\n");
+    uint16_t V = LCD_Read_DATA(0);
+    printf("ID=%04x\n",V);
+
+    setWindow(0,0,240-1,320-1);
     setXY(0,0);
-    while(1) {
-	for(int y=0;y<0x140;y++) {
-	    for(int x=0;x<0xF0;x++) {
-		LCD_Write_DATA(RGB(y*255/0x140,x*255/0xf0,0));
+
+    printf("Running GPIO test 1\n");
+    for(int f=0;f<4;f++) {
+	if (!(f%10)) printf("Count %d\n",f);
+
+	for(int i=0;i<1;i++) {
+	    for(int y=0;y<320;y++) {
+		for(int x=0;x<240;x++) {
+		    LCD_Write_DATA(RGB(y*255/320,x*255/0xf0,0));
+		}
 	    }
-	}
-	for(int y=0;y<0x140;y++) {
-	    for(int x=0;x<0xF0;x++) {
-		LCD_Write_DATA(RGB(0,y*255/0x140,x*255/0xf0));
+	    for(int y=0;y<320;y++) {
+		for(int x=0;x<240;x++) {
+		    LCD_Write_DATA(RGB(0,y*255/320,x*255/0xf0));
+		}
 	    }
-	}
-	for(int y=0;y<0x140;y++) {
-	    for(int x=0;x<0xF0;x++) {
-		LCD_Write_DATA(RGB(x*255/0xf0,0,y*255/0x140));
+	    for(int y=0;y<320;y++) {
+		for(int x=0;x<240;x++) {
+		    LCD_Write_DATA(RGB(x*255/0xf0,0,y*255/320));
+		}
 	    }
 	}
     }
