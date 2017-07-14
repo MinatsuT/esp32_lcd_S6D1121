@@ -10,19 +10,17 @@
 #include "soc/cpu.h"
 #include "esp32_S6D1121.h"
 
-/* i2s_lcd.c */
-void i2s_lcd_test(void);
-
 #define CMD 0
 #define DATA 1
 
+/* Utilities */
 #define RGB(r,g,b) ( (((r>>3)&0b11111)<<11) |  (((g>>2)&0b111111)<<5) |  (((b>>3)&0b11111)<<0) )
 
 static void strobe(gpio_num_t GPIO_NUM, uint32_t s_trig, uint32_t s_normal);
 static void initGPIO(void);
 static void setWriteDir(void);
 static void setReadDir(void);
-static void writeLCD(uint8_t VL, uint8_t isData);
+static void writeByte(uint8_t VL, uint8_t isData);
 static uint16_t LCD_Read_DATA(uint8_t reg);
 static void LCD_Write_COM(uint8_t reg);
 static void LCD_Write_DATA(uint16_t dat);
@@ -35,6 +33,7 @@ static void setXY(uint8_t x1, uint8_t y1);
  * GPIO functions
  ****************************************************/
 static void initGPIO() {
+    // Route GPIO_MUXs -> IO pads.
     gpio_pad_select_gpio(D0);
     gpio_pad_select_gpio(D1);
     gpio_pad_select_gpio(D2);
@@ -49,25 +48,29 @@ static void initGPIO() {
     gpio_pad_select_gpio(WR);
     gpio_pad_select_gpio(RS);
 
+    // Set in-out modes of IO pads.
     gpio_set_direction(RD, GPIO_MODE_OUTPUT);
     gpio_set_direction(RST, GPIO_MODE_OUTPUT);
     gpio_set_direction(WR, GPIO_MODE_OUTPUT);
     gpio_set_direction(RS, GPIO_MODE_OUTPUT);
 
+    setWriteDir();
+
     gpio_set_level(RD, 1);
-    gpio_set_level(RST, 1);
     gpio_set_level(WR, 1);
     gpio_set_level(RS, 1);
 
-    setWriteDir();
-}
-
-static void strobe(gpio_num_t GPIO_NUM, uint32_t s_trig, uint32_t s_normal) {
-    gpio_set_level(GPIO_NUM, s_trig);
-    gpio_set_level(GPIO_NUM, s_normal);
+    // Reset LCD.
+    gpio_set_level(RST, 1);
+    vTaskDelay(1/portTICK_PERIOD_MS);
+    gpio_set_level(RST, 0);
+    vTaskDelay(1/portTICK_PERIOD_MS);
+    gpio_set_level(RST, 1);
+    vTaskDelay(1/portTICK_PERIOD_MS);
 }
 
 static void setWriteDir() {
+    // Set in-out modes of IO pads.
     gpio_set_direction(D0, GPIO_MODE_OUTPUT);
     gpio_set_direction(D1, GPIO_MODE_OUTPUT);
     gpio_set_direction(D2, GPIO_MODE_OUTPUT);
@@ -78,7 +81,15 @@ static void setWriteDir() {
     gpio_set_direction(D7, GPIO_MODE_OUTPUT);
 }
 
+static void strobe(gpio_num_t GPIO_NUM, uint32_t s_trig, uint32_t s_normal) {
+    // Set the active state
+    gpio_set_level(GPIO_NUM, s_trig);
+    // Back to the normal state
+    gpio_set_level(GPIO_NUM, s_normal);
+}
+
 static void setReadDir() {
+    // Set in-out modes of IO pads.
     gpio_set_direction(D0, GPIO_MODE_INPUT);
     gpio_set_direction(D1, GPIO_MODE_INPUT);
     gpio_set_direction(D2, GPIO_MODE_INPUT);
@@ -88,6 +99,7 @@ static void setReadDir() {
     gpio_set_direction(D6, GPIO_MODE_INPUT);
     gpio_set_direction(D7, GPIO_MODE_INPUT);
 
+    // Disable PullUp
     gpio_pullup_dis(D0);
     gpio_pullup_dis(D1);
     gpio_pullup_dis(D2);
@@ -97,6 +109,7 @@ static void setReadDir() {
     gpio_pullup_dis(D6);
     gpio_pullup_dis(D7);
 
+    // Disable PullDown
     gpio_pulldown_dis(D0);
     gpio_pulldown_dis(D1);
     gpio_pulldown_dis(D2);
@@ -176,7 +189,10 @@ static void LCD_Write_COM_DATA(uint8_t reg, uint16_t dat) {
 /*****************************************************
  * LCD commands
  ****************************************************/
+// Send initialize commands.
 static void initLCD() {
+    initGPIO();
+
     LCD_Write_COM_DATA(0x11,0x2004);		
     LCD_Write_COM_DATA(0x13,0xCC00);		
     LCD_Write_COM_DATA(0x15,0x2600);	
@@ -241,14 +257,6 @@ static void setXY(uint8_t x1, uint8_t y1) {
  ****************************************************/
 void lcd_test() {
     // Init GPIO
-    initGPIO();
-
-    // Reset LCD
-    gpio_set_level(RST, 0);
-    vTaskDelay(1/portTICK_PERIOD_MS);
-    gpio_set_level(RST, 1);
-    vTaskDelay(1/portTICK_PERIOD_MS);
-
     initLCD();
 
     printf("Reading ID...\n");
