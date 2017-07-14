@@ -9,7 +9,10 @@
 #include "driver/gpio.h"
 #include "soc/cpu.h"
 
-#include "esp32_S6D1121.c"
+#include "esp32_S6D1121.h"
+
+void lcd_test(void);
+void i2s_lcd_test();
 
 esp_err_t event_handler(void *ctx, system_event_t *event)
 {
@@ -38,7 +41,7 @@ void app_main(void)
 
     while(1) {
 	// GPIO test
-	lcd_test();
+	//lcd_test();
 
 	// I2S test
 	i2s_lcd_test();

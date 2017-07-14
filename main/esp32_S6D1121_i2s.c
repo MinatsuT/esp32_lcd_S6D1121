@@ -7,29 +7,21 @@
  * Modified by MinatsuT
  ****************************************************/
 
-#include <esp_types.h>
 #include <stdio.h>
-#include "rom/ets_sys.h"
-#include "rom/lldesc.h"
-#include "rom/gpio.h"
-
+#include <string.h>
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/semphr.h"
-#include "freertos/queue.h"
-#include "freertos/xtensa_api.h"
-
-#include "soc/uart_reg.h"
-#include "soc/dport_reg.h"
-#include "soc/io_mux_reg.h"
-#include "soc/gpio_sig_map.h"
-#include "soc/gpio_reg.h"
-#include "soc/i2s_reg.h"
-
+#include "esp_wifi.h"
+#include "esp_system.h"
+#include "esp_event.h"
+#include "esp_event_loop.h"
+#include "nvs_flash.h"
+#include "soc/cpu.h"
+#include "rom/lldesc.h"
+#include "driver/gpio.h"
+#include "driver/i2s.h"
 #include <math.h>
 
-#include "driver/i2s.h"
-#include "driver/gpio.h"
+#include "esp32_S6D1121.h"
 
 /* DMA related definitions. */
 #define DMALEN 512 //Bug: >64 samples b0rks the i2s module for now.
@@ -40,6 +32,8 @@ uint16_t *buf=buf1;
 uint16_t buf_cnt=0;
 
 /* Prototypes. */
+static void initGPIO(void);
+static void setWriteDir(void);
 static void initI2SLcdMode(void);
 static void LCD_Write_COM_DATA(int reg, int val);
 static void LCD_Write_COM(uint16_t reg);
@@ -55,35 +49,76 @@ static void initLCD(void);
 static void setWindow(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2);
 static void setXY(uint8_t x1, uint8_t y1);
 
+/* Utilities */
+#define RGB(r,g,b) ( ((((r)>>3)&0b11111)<<11) |  ((((g)>>2)&0b111111)<<5) |  ((((b)>>3)&0b11111)<<0) )
+
+/*****************************************************
+ * GPIO functions
+ ****************************************************/
+static void initGPIO() {
+    // Route GPIO_MUXs -> IO pads.
+    gpio_pad_select_gpio(D0);
+    gpio_pad_select_gpio(D1);
+    gpio_pad_select_gpio(D2);
+    gpio_pad_select_gpio(D3);
+    gpio_pad_select_gpio(D4);
+    gpio_pad_select_gpio(D5);
+    gpio_pad_select_gpio(D6);
+    gpio_pad_select_gpio(D7);
+
+    gpio_pad_select_gpio(RD);
+    gpio_pad_select_gpio(RS);
+    gpio_pad_select_gpio(WR);
+    gpio_pad_select_gpio(RS);
+
+    // Set in-out modes of IO pads.
+    gpio_set_direction(RD, GPIO_MODE_OUTPUT);
+    gpio_set_direction(RST, GPIO_MODE_OUTPUT);
+    gpio_set_direction(WR, GPIO_MODE_OUTPUT);
+    gpio_set_direction(RS, GPIO_MODE_OUTPUT);
+
+    setWriteDir();
+
+    gpio_set_level(RD, 1);
+    gpio_set_level(WR, 1);
+    gpio_set_level(RS, 1);
+
+    // Reset LCD.
+    gpio_set_level(RST, 1);
+    vTaskDelay(1/portTICK_PERIOD_MS);
+    gpio_set_level(RST, 0);
+    vTaskDelay(1/portTICK_PERIOD_MS);
+    gpio_set_level(RST, 1);
+    vTaskDelay(1/portTICK_PERIOD_MS);
+}
+
+static void setWriteDir() {
+    // Set in-out modes of IO pads.
+    gpio_set_direction(D0, GPIO_MODE_OUTPUT);
+    gpio_set_direction(D1, GPIO_MODE_OUTPUT);
+    gpio_set_direction(D2, GPIO_MODE_OUTPUT);
+    gpio_set_direction(D3, GPIO_MODE_OUTPUT);
+    gpio_set_direction(D4, GPIO_MODE_OUTPUT);
+    gpio_set_direction(D5, GPIO_MODE_OUTPUT);
+    gpio_set_direction(D6, GPIO_MODE_OUTPUT);
+    gpio_set_direction(D7, GPIO_MODE_OUTPUT);
+}
+
 /*****************************************************
  * I2S LCD Mode settings
  ****************************************************/
-#define DPORT_I2S0_CLK_EN   (BIT(4))
-#define DPORT_I2S0_RST   (BIT(4))
 static void initI2SLcdMode() {
-    /* Set IO_MUX function to GPIO */
-    PIN_FUNC_SELECT(GPIO_PIN_REG_15,PIN_FUNC_GPIO);
-    PIN_FUNC_SELECT(GPIO_PIN_REG_2, PIN_FUNC_GPIO);
-    PIN_FUNC_SELECT(GPIO_PIN_REG_0, PIN_FUNC_GPIO);
-    PIN_FUNC_SELECT(GPIO_PIN_REG_4, PIN_FUNC_GPIO);
-    PIN_FUNC_SELECT(GPIO_PIN_REG_16,PIN_FUNC_GPIO);
-    PIN_FUNC_SELECT(GPIO_PIN_REG_17,PIN_FUNC_GPIO);
-    PIN_FUNC_SELECT(GPIO_PIN_REG_5, PIN_FUNC_GPIO);
-    PIN_FUNC_SELECT(GPIO_PIN_REG_18,PIN_FUNC_GPIO);
-    PIN_FUNC_SELECT(GPIO_PIN_REG_22,PIN_FUNC_GPIO);
-    PIN_FUNC_SELECT(GPIO_PIN_REG_23,PIN_FUNC_GPIO);
-
-    /* Assign I2S peripheral output to GPIO */
-    gpio_matrix_out(15,I2S0O_DATA_OUT15_IDX,0,0); // MSB
-    gpio_matrix_out( 2,I2S0O_DATA_OUT14_IDX,0,0);
-    gpio_matrix_out( 0,I2S0O_DATA_OUT13_IDX,0,0);
-    gpio_matrix_out( 4,I2S0O_DATA_OUT12_IDX,0,0);
-    gpio_matrix_out(16,I2S0O_DATA_OUT11_IDX,0,0);
-    gpio_matrix_out(17,I2S0O_DATA_OUT10_IDX,0,0);
-    gpio_matrix_out( 5,I2S0O_DATA_OUT9_IDX ,0,0);
-    gpio_matrix_out(18,I2S0O_DATA_OUT8_IDX ,0,0); // LSB
-    gpio_matrix_out(22,I2S0O_WS_OUT_IDX    ,1,0); // WR (Write-strobe in 8080 mode, Active-low)
-    gpio_matrix_out(23,I2S0O_DATA_OUT16_IDX,0,0); // RS (Command/Data select: 0=CMD, 1=DATA)
+    /* Route I2S peripheral outputs -> GPIO_MUXs */
+    gpio_matrix_out(D7,I2S0O_DATA_OUT15_IDX,0,0); // MSB
+    gpio_matrix_out(D6,I2S0O_DATA_OUT14_IDX,0,0);
+    gpio_matrix_out(D5,I2S0O_DATA_OUT13_IDX,0,0);
+    gpio_matrix_out(D4,I2S0O_DATA_OUT12_IDX,0,0);
+    gpio_matrix_out(D3,I2S0O_DATA_OUT11_IDX,0,0);
+    gpio_matrix_out(D2,I2S0O_DATA_OUT10_IDX,0,0);
+    gpio_matrix_out(D1,I2S0O_DATA_OUT9_IDX ,0,0);
+    gpio_matrix_out(D0,I2S0O_DATA_OUT8_IDX ,0,0); // LSB
+    gpio_matrix_out(WR,I2S0O_WS_OUT_IDX    ,1,0); // WR (Write-strobe in 8080 mode, Active-low)
+    gpio_matrix_out(RS,I2S0O_DATA_OUT16_IDX,0,0); // RS (Command/Data select: 0=CMD, 1=DATA)
 
     /* Set I2S0 CLK Enable, and RST Disable */
     DPORT_SET_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG,DPORT_I2S0_CLK_EN);
@@ -98,15 +133,16 @@ static void initI2SLcdMode() {
 
     I2S0.sample_rate_conf.rx_bits_mod=16;
     I2S0.sample_rate_conf.tx_bits_mod=16;
-    I2S0.sample_rate_conf.rx_bck_div_num=3;
-    I2S0.sample_rate_conf.tx_bck_div_num=3;
+    I2S0.sample_rate_conf.rx_bck_div_num=1;
+    I2S0.sample_rate_conf.tx_bck_div_num=1;
 
     I2S0.clkm_conf.val=0;
     I2S0.clkm_conf.clka_en=1;
-    I2S0.clkm_conf.clkm_div_a=0;
+    I2S0.clkm_conf.clkm_div_a=63;
     I2S0.clkm_conf.clkm_div_b=0;
-    I2S0.clkm_conf.clkm_div_num=8;
-
+    I2S0.clkm_conf.clkm_div_num=16;
+    
+    
     //I2S0.fifo_conf.val=0;
     I2S0.fifo_conf.rx_fifo_mod=1;
     I2S0.fifo_conf.tx_fifo_mod=1;
@@ -253,9 +289,9 @@ static void initLCD() {
     flushDma();
 
     // Reset LCD
-    gpio_set_level(GPIO_NUM_19, 0);
-    gpio_set_level(GPIO_NUM_19, 1);
-    vTaskDelay(10/portTICK_PERIOD_MS);
+    gpio_set_level(RST, 0);
+    gpio_set_level(RST, 1);
+    vTaskDelay(120/portTICK_PERIOD_MS);
 
     LCD_Write_COM_DATA(0x11,0x2004);
     LCD_Write_COM_DATA(0x13,0xCC00);
@@ -361,14 +397,14 @@ static const int qsintab[256]={
 };
 
 //Returns value -32K...32K
-static const int isin(int i) {
+static int isin(int i) {
     i=(i&1023);
     if (i>=512) return -isin(i-512);
     if (i>=256) i=(511-i);
     return qsintab[i]-0x8000;
 }
 
-static const int icos(int i) {
+static int icos(int i) {
     return isin(i+256);
 }
 
@@ -382,18 +418,18 @@ static const int icos(int i) {
   }
 */
 
-static void lcd_test1() {
-    int i=0, f=0, x, y, p=0;
+static void lcd_test1(int frames) {
+    int f=0, x, y, p=0;
     int rcos, rsin;
     int zoom; //4.4 fixed point
     int px=-110;
     int py=-110;
     int cx, cxx, dxx, dxy, cy, cxy, dyx, dyy;
-
+    
     printf("Running I2S test 1\n");
 
-    for(f=0;f<200;f++) {
-	if (!(f%10)) printf("Count %d\n",f);
+    for(f=0;f<frames;f++) {
+	if (!((f+1)%50)) printf("Count %d\n",f+1);
 
 	rcos=icos(f*8);
 	rsin=isin(f*8);
@@ -405,7 +441,6 @@ static void lcd_test1() {
 	LCD_Write_COM_DATA(0x21, 0); //V addr1
 	LCD_Write_COM(0x22);
 	flushDma();
-	i=0;
 
 	cxx=(zoom*((px)*rcos-(py)*rsin))>>(22-8);
 	cxy=(zoom*((py)*rcos+(px)*rsin))>>(22-8);
@@ -432,62 +467,81 @@ static void lcd_test1() {
     }
 }
 
-#define RGB(r,g,b) ( ((((r)>>3)&0b11111)<<11) |  ((((g)>>2)&0b111111)<<5) |  ((((b)>>3)&0b11111)<<0) )
-static void lcd_test2() {
+static void lcd_test2(uint32_t frames) {
     printf("Running I2S test 2\n");
 
-    for(int f=0;f<200*2;f+=2) {
-	if (!(f%10)) printf("Count %d\n",f);
+    for(int f=0;f<frames;f++) {
+	if (!((f+1)%50)) printf("Count %d\n",f+1);
 
-	for(int y=0;y<0x140;y++) {
-	    for(int x=0;x<0xF0;x++) {
-		if ( ((0x140 + ((y-f)%0x140))%0x140) <8 || ( (0xF0 + ((x-f)%0xF0))%0xF0 ) <8 ) {
+	int i=f*2;
+	for(int y=0;y<320;y++) {
+	    int y_flag = ((320+i-y)%320) <8;
+	    for(int x=0;x<240;x++) {
+		if ( y_flag || ((240+i-x)%240) <8 ) {
 		    LCD_Write_DATA(0xffff);
 		} else {
-		    LCD_Write_DATA(RGB(x+y+f*1,x+f*2,y+f*3));
+		    LCD_Write_DATA(RGB(x+y+i*1,x+i*2,y+i*3));
 		}
 	    }
 	}
     }
 }
 
-static void lcd_test3() {
+static void lcd_test3(uint32_t frames) {
     printf("Running I2S test 3\n");
 
-    for(int f=0;f<60;f++) {
-	if (!(f%10)) printf("Count %d\n",f);
+    int col=0;
+    for(int f=0;f<frames;f++) {
+	if (!((f+1)%50)) printf("Count %d\n",f+1);
 
-	for(int y=0;y<0x140;y++) {
-	    for(int x=0;x<0xF0;x++) {
-		LCD_Write_DATA(RGB(y*255/0x140,x*255/0xf0,0));
-	    }
-	}
-
-	for(int y=0;y<0x140;y++) {
-	    for(int x=0;x<0xF0;x++) {
-		LCD_Write_DATA(RGB(0,y*255/0x140,x*255/0xf0));
-	    }
-	}
-
-	for(int y=0;y<0x140;y++) {
-	    for(int x=0;x<0xF0;x++) {
-		LCD_Write_DATA(RGB(x*255/0xf0,0,y*255/0x140));
+	for(int y=0;y<320;y++) {
+	    for(int x=0;x<240;x++) {
+		switch (f%3) {
+		case 0:
+		    col = RGB(y*255/0x140,x*255/0xf0,0);
+		    break;
+		case 1:
+		    col = RGB(0,y*255/0x140,x*255/0xf0);
+		    break;
+		case 2:
+		    col = RGB(x*255/0xf0,0,y*255/0x140);
+		    break;
+		}
+		LCD_Write_DATA(col);
 	    }
 	}
     }
 }
 
 void i2s_lcd_test() {
-    // Init I2S LCD Mode
+    /* Initialize GPIO pin out. */
+    initGPIO();
+
+    /* Init I2S LCD Mode. */
     initI2SLcdMode();
 
+    /*  Send initialize commands. */
     initLCD();
     flushDma();
     
     setWindow(0,0,240-1,320-1);
     setXY(0,0);
 
-    lcd_test1();
-    lcd_test2();
-    lcd_test3();
+    uint32_t startTime=0;
+    float duration;
+
+    startTime = portGET_RUN_TIME_COUNTER_VALUE();
+    lcd_test1(200);
+    duration = (portGET_RUN_TIME_COUNTER_VALUE()-startTime)/XT_CLOCK_FREQ;
+    printf("%5.2f fps\n",200/duration);
+
+    startTime = portGET_RUN_TIME_COUNTER_VALUE();
+    lcd_test2(200);
+    duration = (portGET_RUN_TIME_COUNTER_VALUE()-startTime)/XT_CLOCK_FREQ;
+    printf("%5.2f fps\n",200/duration);
+
+    startTime = portGET_RUN_TIME_COUNTER_VALUE();
+    lcd_test3(200);
+    duration = (portGET_RUN_TIME_COUNTER_VALUE()-startTime)/XT_CLOCK_FREQ;
+    printf("%5.2f fps\n",200/duration);
 }

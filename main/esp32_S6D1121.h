@@ -15,6 +15,4 @@
 #define D6 GPIO_NUM_2
 #define D7 GPIO_NUM_15
 
-void lcd_test(void);
-
 #endif /* __ESP32_S6D1121_H__ */
